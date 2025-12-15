@@ -8,14 +8,15 @@ hostPath: /mnt/grit-agent
 
 image:
   gritmanager:
-    registry: kaito.sh
-    repository: grit-manager
-    tag: 0.0.1
+    registry: ghcr.io
+    repository: cumulus-compute-labs/grit-manager
+    tag: dev
     pullSecrets: []
   gritagent:
-    registry: kaito.sh
-    repository: grit-agent
-    tag: 0.0.1
+    registry: ghcr.io
+    repository: cumulus-compute-labs/grit-agent
+    tag: dev
+    pullSecrets: []
 
 ports:
   metrics: 10351
@@ -29,4 +30,4 @@ resources:
   requests:
     cpu: 200m
     memory: 256Mi
-  
+

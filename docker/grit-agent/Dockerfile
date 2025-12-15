@@ -1,5 +1,5 @@
 # Build the binary
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.23 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=${GOCACHE} \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GO111MODULE=on make bin/grit-agent
 
 # Build a small image
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/devcontainers/base:ubuntu
+FROM --platform=$BUILDPLATFORM ubuntu:22.04
 WORKDIR /
 COPY --from=builder /workspace/_output/grit-agent .
 
