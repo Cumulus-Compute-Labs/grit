@@ -66,8 +66,10 @@ spec:
       imagePullSecrets:
 {{ toYaml .Values.image.pullSecrets | indent 8 }}
       {{- end }}
+      {{- if .Values.nodeSelector }}
       nodeSelector:
-        agentpool: agentpool
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      {{- end }}
       tolerations:
         - effect: NoSchedule
           key: node-role.kubernetes.io/master

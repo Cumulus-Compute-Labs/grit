@@ -211,23 +211,27 @@ func readRuntimeOptions(r *task.CreateTaskRequest) (*options.Options, error) {
 
 	v, err := typeurl.UnmarshalAny(r.Options)
 	if err != nil {
-		return nil, err
+		// If we can't unmarshal options, use defaults (nvidia-container-runtime will be used)
+		return opts, nil
 	}
 
 	o, ok := v.(*runtimeoptions.Options)
 	if !ok {
-		return nil, fmt.Errorf("unknown runtime options type %T", v)
+		// Unknown options type, use defaults
+		return opts, nil
 	}
 
 	if o.ConfigPath == "" {
 		oo, err := typeurl.UnmarshalByTypeURL(o.GetTypeUrl(), o.GetConfigBody())
 		if err != nil {
-			return nil, err
+			// Can't unmarshal config body, use defaults
+			return opts, nil
 		}
-		if _, ok := oo.(*options.Options); ok {
-			return oo.(*options.Options), nil
+		if runcOpts, ok := oo.(*options.Options); ok {
+			return runcOpts, nil
 		}
-		return nil, fmt.Errorf("unknown runtime options type %T", oo)
+		// Unknown inner options type, use defaults
+		return opts, nil
 	}
 
 	f, err := os.Open(o.ConfigPath)
@@ -291,7 +295,12 @@ func WriteRuntime(path, runtime string) error {
 
 func newInit(ctx context.Context, path, workDir, namespace string, platform stdio.Platform,
 	r *process.CreateConfig, options *options.Options, rootfs string) (*process.Init, error) {
-	runtime := process.NewRunc(options.Root, path, namespace, options.BinaryName, options.SystemdCgroup)
+	// Default to nvidia-container-runtime for GPU support if no binary specified
+	binaryName := options.BinaryName
+	if binaryName == "" {
+		binaryName = "nvidia-container-runtime"
+	}
+	runtime := process.NewRunc(options.Root, path, namespace, binaryName, options.SystemdCgroup)
 	p := process.New(r.ID, runtime, stdio.Stdio{
 		Stdin:    r.Stdin,
 		Stdout:   r.Stdout,

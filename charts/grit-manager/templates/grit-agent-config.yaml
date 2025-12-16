@@ -22,7 +22,7 @@ data:
           volumes:
           - name: containerd-sock
             hostPath:
-              path: /run/containerd/containerd.sock
+              path: {{ .Values.runtimeSocket | default "/run/containerd/containerd.sock" }}
               type: Socket
           - name: pod-logs
             hostPath:
@@ -35,10 +35,10 @@ data:
           - name: grit-agent
             image: {{ .Values.image.gritagent.registry }}/{{ .Values.image.gritagent.repository }}:{{ .Values.image.gritagent.tag | default .Chart.AppVersion }}
             command: ["/grit-agent"]
-            args: ["--v=5"]
+            args: ["--v=5", "--runtime-endpoint={{ .Values.runtimeSocket | default "/run/containerd/containerd.sock" }}"]
             imagePullPolicy: IfNotPresent
             volumeMounts:
             - name: containerd-sock
-              mountPath: /run/containerd/containerd.sock
+              mountPath: {{ .Values.runtimeSocket | default "/run/containerd/containerd.sock" }}
             - name: pod-logs
               mountPath: /var/log/pods

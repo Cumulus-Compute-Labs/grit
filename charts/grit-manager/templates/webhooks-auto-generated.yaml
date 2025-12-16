@@ -8,8 +8,8 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
-        namespace: system
+        name: grit-manager-webhook-svc
+        namespace: {{ .Release.Namespace }}
         path: /mutate-core-v1-pod
     failurePolicy: Ignore
     name: mutating.pods.k8s.io
@@ -27,8 +27,8 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
-        namespace: system
+        name: grit-manager-webhook-svc
+        namespace: {{ .Release.Namespace }}
         path: /mutate-kaito-sh-v1alpha1-restore
     failurePolicy: Fail
     name: mutating.restores.kaito.sh
@@ -52,8 +52,8 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
-        namespace: system
+        name: grit-manager-webhook-svc
+        namespace: {{ .Release.Namespace }}
         path: /validate-kaito-sh-v1alpha1-checkpoint
     failurePolicy: Fail
     name: validating.checkpoints.kaito.sh
@@ -71,8 +71,8 @@ webhooks:
       - v1
     clientConfig:
       service:
-        name: webhook-service
-        namespace: system
+        name: grit-manager-webhook-svc
+        namespace: {{ .Release.Namespace }}
         path: /validate-kaito-sh-v1alpha1-restore
     failurePolicy: Fail
     name: validating.restores.kaito.sh

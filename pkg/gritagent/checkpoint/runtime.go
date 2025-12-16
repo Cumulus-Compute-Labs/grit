@@ -156,29 +156,33 @@ func runtimeCheckpointContainer(ctx context.Context, ctrmeta *runtimeapi.Contain
 	return nil
 }
 
-func withCheckpointOpts(imagePath, workPath string) containerd.CheckpointTaskOpts {
-	return func(r *containerd.CheckpointTaskInfo) error {
-		if r.Options == nil {
-			r.Options = &runcoptions.CheckpointOptions{}
-		}
-		opts, _ := r.Options.(*runcoptions.CheckpointOptions)
-
-		if imagePath != "" {
-			opts.ImagePath = imagePath
-		}
-		if workPath != "" {
-			opts.WorkPath = workPath
-		}
-
-		return nil
-	}
-}
-
 func writeCriuCheckpoint(ctx context.Context, task containerd.Task, checkpointPath, criuWorkPath string) error {
-	taskOpts := []containerd.CheckpointTaskOpts{
-		withCheckpointOpts(checkpointPath, criuWorkPath),
+	// Ensure checkpoint directory exists
+	if err := os.MkdirAll(checkpointPath, 0755); err != nil {
+		return fmt.Errorf("failed to create checkpoint path %s: %w", checkpointPath, err)
 	}
-	_, err := task.Checkpoint(ctx, taskOpts...)
+
+	// Create CheckpointOptions with the correct ImagePath - this is CRITICAL
+	// Without ImagePath, CRIU performs a "headless" checkpoint that writes empty files
+	checkpointOpts := &runcoptions.CheckpointOptions{
+		ImagePath:           checkpointPath,
+		WorkPath:            criuWorkPath,
+		Exit:                false,
+		OpenTcp:             true,
+		ExternalUnixSockets: true,
+		Terminal:            false,
+		FileLocks:           true,
+	}
+
+	// CheckpointTaskOpts signature in containerd v2: func(*CheckpointTaskInfo) error
+	opts := []containerd.CheckpointTaskOpts{
+		func(info *containerd.CheckpointTaskInfo) error {
+			info.Options = checkpointOpts
+			return nil
+		},
+	}
+
+	_, err := task.Checkpoint(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to checkpoint task %s: %w", task.ID(), err)
 	}
