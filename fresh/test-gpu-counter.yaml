@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-counter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gpu-counter
+  template:
+    metadata:
+      labels:
+        app: gpu-counter
+    spec:
+      runtimeClassName: grit
+      nodeSelector:
+        kubernetes.io/hostname: 192-9-150-56
+      containers:
+      - name: counter
+        image: nvidia/cuda:12.0.0-base-ubuntu22.04
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          i=0
+          while true; do
+            echo "Counter: $i"
+            i=$((i+1))
+            sleep 1
+          done
+        resources:
+          limits:
+            nvidia.com/gpu: 1

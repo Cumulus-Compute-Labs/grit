@@ -1,0 +1,101 @@
+diff --git a/pkg/gritagent/checkpoint/runtime.go b/pkg/gritagent/checkpoint/runtime.go
+index original..patched 100644
+--- a/pkg/gritagent/checkpoint/runtime.go
++++ b/pkg/gritagent/checkpoint/runtime.go
+@@ -8,6 +8,8 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"os"
++	"os/exec"
++	"strconv"
+ 	"path"
+ 	"sort"
+ 	"time"
+@@ -106,17 +108,10 @@ func runtimeCheckpointContainer(ctx context.Context, ctrmeta *runtimeapi.Contai
+ 	task, err := container.Task(ctx, nil)
+ 	if err != nil {
+ 		return err
+ 	}
+-	// pause if running
+-	if task != nil {
+-		if err := task.Pause(ctx); err != nil {
+-			return err
+-		}
+-		defer func() {
+-			if err := task.Resume(ctx); err != nil {
+-				log.FromContext(ctx).Error(err, "failed to resume task", "container", ctrmeta.Id)
+-			}
+-		}()
+-	}
++	
++	// Don't pause - CRIU will handle process suspension via ptrace
++	// This allows CUDA plugin to run before process is frozen
+ 
+ 	// dump criu image
+ 	logger.Info("Checkpointing container", "step", "criu dump")
+@@ -163,27 +158,42 @@ func writeCriuCheckpoint(ctx context.Context, task containerd.Task, checkpointP
+ 		return fmt.Errorf("failed to create checkpoint path %s: %w", checkpointPath, err)
+ 	}
+ 
+-	// Create CheckpointOptions with the correct ImagePath - this is CRITICAL
+-	// Without ImagePath, CRIU performs a "headless" checkpoint that writes empty files
+-	checkpointOpts := &runcoptions.CheckpointOptions{
+-		ImagePath:           checkpointPath,
+-		WorkPath:            criuWorkPath,
+-		Exit:                false,
+-		OpenTcp:             true,
+-		ExternalUnixSockets: true,
+-		Terminal:            false,
+-		FileLocks:           true,
++	// Get process PID
++	pid := task.Pid()
++	if pid == 0 {
++		return fmt.Errorf("task %s has no PID", task.ID())
+ 	}
+ 
+-	// CheckpointTaskOpts signature in containerd v2: func(*CheckpointTaskInfo) error
+-	opts := []containerd.CheckpointTaskOpts{
+-		func(info *containerd.CheckpointTaskInfo) error {
+-			info.Options = checkpointOpts
+-			return nil
+-		},
++	// Call CRIU directly (bypass runc to avoid cgroup freeze)
++	// This allows CUDA plugin to run before process is frozen
++	criuArgs := []string{
++		"dump",
++		"-t", strconv.Itoa(int(pid)),
++		"-D", checkpointPath,
++		"-v4",
++		"--log-file", path.Join(checkpointPath, "dump.log"),
++		"--external", "mnt[]",
++		"--force-irmap",
++		"--shell-job",
++		"--tcp-established",
++		"--ext-unix-sk",
++	}
++
++	// Execute CRIU
++	cmd := exec.Command("/usr/local/bin/criu.real", criuArgs...)
++	cmd.Dir = criuWorkPath
++	
++	output, err := cmd.CombinedOutput()
++	if err != nil {
++		log.FromContext(ctx).Error(err, "CRIU dump failed", 
++			"pid", pid,
++			"output", string(output),
++			"checkpointPath", checkpointPath)
++		return fmt.Errorf("failed to checkpoint task %s: %w\nOutput: %s", task.ID(), err, string(output))
+ 	}
+ 
+-	_, err := task.Checkpoint(ctx, opts...)
+-	if err != nil {
+-		return fmt.Errorf("failed to checkpoint task %s: %w", task.ID(), err)
+-	}
++	log.FromContext(ctx).Info("CRIU checkpoint completed", 
++		"pid", pid, 
++		"path", checkpointPath,
++		"taskID", task.ID())
++	
+ 	return nil
+ }
+

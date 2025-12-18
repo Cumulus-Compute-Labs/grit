@@ -1,0 +1,8 @@
+apiVersion: kaito.sh/v1alpha1
+kind: Checkpoint
+metadata:
+  name: gpu-counter-ckpt
+spec:
+  podName: gpu-counter-7db7d769c-hqrv7
+  volumeClaim:
+    claimName: ckpt-store

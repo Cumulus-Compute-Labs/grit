@@ -1,3 +1,15 @@
+#!/bin/bash
+# Rebuild grit-agent with descriptors.json fix
+
+set -e
+
+echo "=== Step 1: Copy updated runtime.go to server ==="
+cd /tmp
+rm -rf /tmp/grit-build 2>/dev/null || true
+mkdir -p /tmp/grit-build
+
+# Copy updated source from local
+cat > /tmp/grit-build/runtime.go << 'GOSOURCE'
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
@@ -62,7 +74,6 @@ func RuntimeCheckpointPod(ctx context.Context, opts *options.RuntimeCheckpointOp
 	}
 
 	// checkpoint each container
-	// TODO: consider consistency problems when checkpointing multiple containers
 	for _, container := range containers {
 		if err := runtimeCheckpointContainer(ctx, container, ctrClient, opts); err != nil {
 			return fmt.Errorf("failed to checkpoint container %s: %w", container.Id, err)
@@ -90,11 +101,9 @@ func getContainerdClient(ctx context.Context, opts *options.RuntimeCheckpointOpt
 }
 
 func runtimeCheckpointContainer(ctx context.Context, ctrmeta *runtimeapi.Container, client *containerd.Client, opts *options.RuntimeCheckpointOptions) error {
-	// checkpoint to a temporary directory, then perform a rename to ensure atomicity
 	workPath := path.Join(opts.HostWorkPath, ctrmeta.GetMetadata().GetName()+"-work")
 	logger := log.FromContext(ctx).WithValues("container", ctrmeta.Id, "workPath", workPath)
 	ctx = log.IntoContext(ctx, logger)
-	// ensure the work path exists
 	if err := os.MkdirAll(workPath, 0755); err != nil {
 		return fmt.Errorf("failed to create work path %s: %w", workPath, err)
 	}
@@ -109,36 +118,27 @@ func runtimeCheckpointContainer(ctx context.Context, ctrmeta *runtimeapi.Contain
 	if err != nil {
 		return err
 	}
-	// Don't pause - CRIU will handle process suspension via ptrace
-	// This allows CUDA plugin to run before process is frozen
-	_ = task // task is used in writeCriuCheckpoint
+	_ = task
 
-	// dump criu image
 	logger.Info("Checkpointing container", "step", "criu dump")
 	checkpointPath := path.Join(workPath, crmetadata.CheckpointDirectory)
 	if err := writeCriuCheckpoint(ctx, task, checkpointPath, workPath); err != nil {
 		return fmt.Errorf("failed to write criu checkpoint: %w", err)
 	}
 
-	// dump rw layer
 	logger.Info("Checkpointing container", "step", "write rootfs diff")
 	rootFsDiffTarPath := path.Join(workPath, crmetadata.RootFsDiffTar)
 	if err := writeRootFsDiffTar(ctx, ctrmeta, client, rootFsDiffTarPath); err != nil {
 		return fmt.Errorf("failed to write rootfs diff tar: %w", err)
 	}
 
-	// save logs
 	logger.Info("Checkpointing container", "step", "save container logs")
 	containerLogPath := path.Join(getPodLogPath(opts), ctrmeta.GetMetadata().GetName())
 	savePath := path.Join(workPath, metadata.ContainerLogFile)
 	if err := writeContainerLog(ctx, containerLogPath, savePath); err != nil {
-		// not a critical error, just log it
 		logger.Info("Failed to save container log", "error", err)
 	}
 
-	// TODO: add config.dump and spec.dump
-
-	// rename the work path to the final checkpoint path
 	logger.Info("Checkpointing container", "step", "rename work path")
 	checkpointDir := path.Join(opts.HostWorkPath, ctrmeta.GetMetadata().GetName())
 	if err := os.Rename(workPath, checkpointDir); err != nil {
@@ -151,23 +151,17 @@ func runtimeCheckpointContainer(ctx context.Context, ctrmeta *runtimeapi.Contain
 }
 
 func writeCriuCheckpoint(ctx context.Context, task containerd.Task, checkpointPath, criuWorkPath string) error {
-	// Ensure checkpoint directory exists
 	if err := os.MkdirAll(checkpointPath, 0755); err != nil {
 		return fmt.Errorf("failed to create checkpoint path %s: %w", checkpointPath, err)
 	}
 
-	// Get process PID
 	pid := task.Pid()
 	if pid == 0 {
 		return fmt.Errorf("task %s has no PID", task.ID())
 	}
 
-	// PRE-FIX: Make ALL mounts with master: (shared propagation) private
-	// This fixes the "unreachable sharing" error for NVIDIA/CUDA mounts
 	log.FromContext(ctx).Info("Pre-fixing mount propagation for shared mounts", "pid", pid)
 	
-	// Find ALL mounts that have "master:" in their line (shared propagation)
-	// These are the ones that cause "unreachable sharing" errors
 	findMountsCmd := exec.Command("awk", "$0 ~ /master:/ {print $5}", fmt.Sprintf("/proc/%d/mountinfo", pid))
 	mountsOutput, _ := findMountsCmd.Output()
 	mounts := strings.Split(strings.TrimSpace(string(mountsOutput)), "\n")
@@ -188,8 +182,6 @@ func writeCriuCheckpoint(ctx context.Context, task containerd.Task, checkpointPa
 	}
 	log.FromContext(ctx).Info("Mount fixes completed", "fixed", fixedCount, "total", len(mounts))
 
-	// PRE-STEP: Manually lock and checkpoint CUDA state before CRIU dump
-	// This is required because CRIU plugin needs the process in a specific state
 	log.FromContext(ctx).Info("Locking CUDA state", "pid", pid)
 	cudaLock := exec.Command("/usr/local/cuda/bin/cuda-checkpoint", "--action", "lock", "--pid", strconv.Itoa(int(pid)))
 	if output, err := cudaLock.CombinedOutput(); err != nil {
@@ -202,10 +194,6 @@ func writeCriuCheckpoint(ctx context.Context, task containerd.Task, checkpointPa
 		log.FromContext(ctx).Info("CUDA checkpoint error (continuing)", "error", err, "output", string(output))
 	}
 
-	// Call CRIU directly (bypass runc to avoid cgroup freeze)
-	// CRITICAL: Run CRIU from HOST's mount namespace using nsenter -t 1 -m
-	// This gives CRIU the same view as the working manual test
-	// PID 1 with hostPID:true is the host's init process
 	criuArgs := []string{
 		"-t", "1",
 		"-m", "--",
@@ -222,7 +210,6 @@ func writeCriuCheckpoint(ctx context.Context, task containerd.Task, checkpointPa
 		"--ext-unix-sk",
 	}
 
-	// Execute CRIU via nsenter into HOST's mount namespace
 	cmd := exec.Command("nsenter", criuArgs...)
 	cmd.Dir = criuWorkPath
 
@@ -241,8 +228,6 @@ func writeCriuCheckpoint(ctx context.Context, task containerd.Task, checkpointPa
 		"taskID", task.ID())
 
 	// Create descriptors.json - required by runc restore
-	// This file contains external file descriptors info
-	// For GPU workloads, an empty array is sufficient as CRIU handles FDs internally
 	descriptorsPath := path.Join(checkpointPath, "descriptors.json")
 	if err := os.WriteFile(descriptorsPath, []byte("[]"), 0644); err != nil {
 		log.FromContext(ctx).Error(err, "Failed to create descriptors.json", "path", descriptorsPath)
@@ -277,7 +262,6 @@ func writeRootFsDiffTar(ctx context.Context, ctrmeta *runtimeapi.Container, clie
 	}
 	defer ra.Close()
 
-	// the rw layer tarball
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", path, err)
@@ -338,3 +322,50 @@ func writeContainerLog(ctx context.Context, logdir, savePath string) error {
 
 	return nil
 }
+GOSOURCE
+
+echo "=== Step 2: Build grit-agent binary ==="
+cd /tmp/grit-build
+
+# Clone GRIT repo for building
+git clone --depth 1 https://github.com/kaito-project/grit.git grit-src 2>/dev/null || true
+cd grit-src
+
+# Copy updated runtime.go
+cp /tmp/grit-build/runtime.go pkg/gritagent/checkpoint/runtime.go
+
+# Build
+export PATH=/usr/local/go/bin:$PATH
+export GOROOT=/usr/local/go
+go build -o /tmp/grit-build/grit-agent ./cmd/grit-agent
+
+echo "=== Step 3: Build Docker image ==="
+cd /tmp/grit-build
+
+cat > Dockerfile << 'DOCKERFILE'
+FROM debian:bookworm-slim
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    libbsd0 libnet1 libnl-3-200 libprotobuf-c1 \
+    iptables procps gawk util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy grit-agent binary
+COPY grit-agent /grit-agent
+RUN mkdir -p /usr/local/bin && cp /grit-agent /usr/local/bin/grit-agent
+RUN chmod +x /grit-agent /usr/local/bin/grit-agent
+
+ENTRYPOINT ["/usr/local/bin/grit-agent"]
+DOCKERFILE
+
+sudo docker build --no-cache -t grit-agent:gpu-fix .
+
+echo "=== Step 4: Import to containerd ==="
+sudo docker save grit-agent:gpu-fix | sudo /var/lib/rancher/k3s/data/current/bin/ctr -n k8s.io images import -
+
+echo "=== Step 5: Verify ==="
+sudo /var/lib/rancher/k3s/data/current/bin/ctr -n k8s.io images ls | grep grit-agent
+
+echo ""
+echo "=== Done! Now delete old checkpoint and test again ==="

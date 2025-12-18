@@ -1,0 +1,11 @@
+apiVersion: kaito.sh/v1alpha1
+kind: Restore
+metadata:
+  name: gpu-counter-restore
+spec:
+  checkpointName: gpu-counter-ckpt
+  ownerRef:
+    apiVersion: apps/v1
+    kind: ReplicaSet
+    name: gpu-counter-7db7d769c
+    uid: 95e6f8c3-47bd-4a97-8ff6-f954f9ae9ada
